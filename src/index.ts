@@ -11,10 +11,10 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { zodToJsonSchema } from "./zod-to-json.js";
-import { tools } from "./tools.js";
-import { GeniClient } from "./geni-client.js";
-import { EnvTokenStore, getOAuthConfig } from "./oauth.js";
+import { zodToJsonSchema } from "./zod-to-json.ts";
+import { tools } from "./tools.ts";
+import { GeniClient } from "./geni-client.ts";
+import { EnvTokenStore, getOAuthConfig } from "./oauth.ts";
 
 async function main() {
   const tokenStore = new EnvTokenStore();

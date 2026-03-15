@@ -1,13 +1,13 @@
 // MCP tool definitions and handlers for Geni
 
 import { z } from "zod";
-import type { GeniClient } from "./geni-client.js";
-import type { OAuthConfig, TokenStore } from "./oauth.js";
+import type { GeniClient } from "./geni-client.ts";
+import type { OAuthConfig, TokenStore } from "./oauth.ts";
 import {
   buildAuthorizationUrl,
   exchangeCodeForTokens,
-} from "./oauth.js";
-import type { GeniEvent, GeniLocation, GeniDate } from "./types.js";
+} from "./oauth.ts";
+import type { GeniEvent, GeniLocation, GeniDate } from "./types.ts";
 
 // ── Zod schemas ──────────────────────────────────────────────────────────────
 
