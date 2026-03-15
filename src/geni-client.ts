@@ -15,10 +15,13 @@ import { refreshAccessToken } from "./oauth.js";
 const GENI_API_BASE = "https://www.geni.com/api";
 
 export class GeniClient {
-  constructor(
-    private readonly tokenStore: TokenStore,
-    private readonly oauthConfig: OAuthConfig
-  ) {}
+  private readonly tokenStore: TokenStore;
+  private readonly oauthConfig: OAuthConfig;
+
+  constructor(tokenStore: TokenStore, oauthConfig: OAuthConfig) {
+    this.tokenStore = tokenStore;
+    this.oauthConfig = oauthConfig;
+  }
 
   // ── Low-level HTTP ──────────────────────────────────────────────────────────
 
