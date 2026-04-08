@@ -15,16 +15,9 @@
 //   POST /mcp  — MCP protocol endpoint (StreamableHTTP)
 //   GET  /oauth/callback — OAuth redirect handler
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { zodToJsonSchema } from "./zod-to-json.js";
-import { tools } from "./tools.js";
-import { GeniClient } from "./geni-client.js";
+import { createMcpServer, SERVER_NAME, SERVER_VERSION } from "./server.js";
 import {
   EnvTokenStore,
   getOAuthConfig,
@@ -34,49 +27,10 @@ import {
 // Shared token store across function invocations (best-effort — use a real
 // persistent store like Cloud Secret Manager for production).
 const tokenStore = new EnvTokenStore();
+// Config is immutable — read once at module load.
+const oauthConfig = getOAuthConfig();
 
-function createServer() {
-  const oauthConfig = getOAuthConfig();
-  const client = new GeniClient(tokenStore, oauthConfig);
-
-  const server = new Server(
-    { name: "geni-mcp", version: "1.0.0" },
-    { capabilities: { tools: {} } }
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: zodToJsonSchema(t.inputSchema),
-    })),
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const tool = tools.find((t) => t.name === request.params.name);
-    if (!tool) {
-      return {
-        content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }],
-        isError: true,
-      };
-    }
-    try {
-      return await tool.handler(request.params.arguments ?? {}, {
-        client,
-        tokenStore,
-        oauthConfig,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        content: [{ type: "text", text: `Error: ${message}` }],
-        isError: true,
-      };
-    }
-  });
-
-  return { server, oauthConfig };
-}
+const MAX_BODY_BYTES = 1 * 1024 * 1024; // 1 MB guard
 
 /** GCP Cloud Functions HTTP entry point */
 export async function geniMcp(
@@ -84,7 +38,6 @@ export async function geniMcp(
   res: ServerResponse
 ): Promise<void> {
   const url = req.url ?? "/";
-  const method = req.method ?? "GET";
 
   // ── OAuth callback handler ──────────────────────────────────────────────
   if (url.startsWith("/oauth/callback")) {
@@ -94,9 +47,7 @@ export async function geniMcp(
 
     if (error) {
       res.writeHead(400, { "Content-Type": "text/html" });
-      res.end(
-        `<h2>Authorization failed</h2><p>Error: ${escapeHtml(error)}</p>`
-      );
+      res.end(`<h2>Authorization failed</h2><p>Error: ${escapeHtml(error)}</p>`);
       return;
     }
 
@@ -107,7 +58,6 @@ export async function geniMcp(
     }
 
     try {
-      const oauthConfig = getOAuthConfig();
       const tokens = await exchangeCodeForTokens(oauthConfig, code);
       tokenStore.setTokens(
         tokens.access_token,
@@ -132,7 +82,8 @@ export async function geniMcp(
 
   // ── MCP StreamableHTTP endpoint ─────────────────────────────────────────
   if (url === "/mcp" || url === "/mcp/") {
-    const { server } = createServer();
+    const body = await readBody(req);
+    const server = createMcpServer(tokenStore, oauthConfig);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless mode for Cloud Functions
     });
@@ -143,14 +94,14 @@ export async function geniMcp(
     });
 
     await server.connect(transport);
-    await transport.handleRequest(req, res, await readBody(req));
+    await transport.handleRequest(req, res, body);
     return;
   }
 
   // ── Health check ────────────────────────────────────────────────────────
   if (url === "/" || url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", server: "geni-mcp", version: "1.0.0" }));
+    res.end(JSON.stringify({ status: "ok", server: SERVER_NAME, version: SERVER_VERSION }));
     return;
   }
 
@@ -158,22 +109,31 @@ export async function geniMcp(
   res.end("Not found");
 }
 
+// Read and size-cap the request body before passing to the MCP transport.
 async function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
-      const body = Buffer.concat(chunks).toString("utf8");
-      if (!body) {
-        resolve({});
+    let totalBytes = 0;
+
+    req.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.destroy(new Error(`Request body exceeds ${MAX_BODY_BYTES} bytes`));
         return;
       }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      if (!body) { resolve({}); return; }
       try {
         resolve(JSON.parse(body));
       } catch {
         resolve({});
       }
     });
+
     req.on("error", reject);
   });
 }
@@ -183,5 +143,6 @@ function escapeHtml(str: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
 }

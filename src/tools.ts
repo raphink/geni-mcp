@@ -7,7 +7,7 @@ import {
   buildAuthorizationUrl,
   exchangeCodeForTokens,
 } from "./oauth.js";
-import type { GeniEvent, GeniLocation, GeniDate } from "./types.js";
+import type { GeniEvent, GeniLocation, GeniDate, GeniProfile, GeniFamilyNode, GeniSearchResult, GeniMergeCandidate } from "./types.js";
 
 // ── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -399,17 +399,7 @@ export const tools: ToolDefinition[] = [
       ];
 
       for (const r of results.results) {
-        const born = formatEvent({ date: r.birth?.date, location: r.birth?.location });
-        const died = formatEvent({ date: r.death?.date, location: r.death?.location });
-        const life =
-          born || died
-            ? ` (${[born ? `b. ${born}` : "", died ? `d. ${died}` : ""]
-                .filter(Boolean)
-                .join(", ")})`
-            : "";
-        lines.push(
-          `• ${r.display_name ?? r.name ?? "Unknown"}${life}\n  ID: ${r.id}${r.url ? `\n  URL: ${r.url}` : ""}`
-        );
+        lines.push(formatSearchHit(r));
       }
 
       return ok(lines.join("\n"));
@@ -440,16 +430,7 @@ export const tools: ToolDefinition[] = [
       ];
 
       for (const c of resp.candidates) {
-        const born = formatEvent({ date: c.birth?.date, location: c.birth?.location });
-        const died = formatEvent({ date: c.death?.date, location: c.death?.location });
-        lines.push(
-          `• ${c.display_name ?? c.name ?? "Unknown"}` +
-            (c.score !== undefined ? ` [score: ${c.score}]` : "") +
-            `\n  ID: ${c.id}` +
-            (born ? `\n  Born: ${born}` : "") +
-            (died ? `\n  Died: ${died}` : "") +
-            (c.url ? `\n  URL: ${c.url}` : "")
-        );
+        lines.push(formatSearchHit(c, c.score !== undefined ? `[score: ${c.score}]` : undefined));
       }
 
       return ok(lines.join("\n"));
@@ -489,27 +470,7 @@ export const tools: ToolDefinition[] = [
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 
-function formatProfile(p: {
-  id: string;
-  display_name?: string;
-  name?: string;
-  first_name?: string;
-  middle_name?: string;
-  last_name?: string;
-  maiden_name?: string;
-  suffix?: string;
-  gender?: string;
-  is_alive?: boolean;
-  birth?: GeniEvent;
-  death?: GeniEvent;
-  burial?: GeniEvent;
-  about_me?: string;
-  url?: string;
-  unions?: string[];
-  nationalities?: string[];
-  big_tree?: boolean;
-  claimed?: boolean;
-}): string {
+function formatProfile(p: GeniProfile): string {
   const lines: string[] = [];
 
   const displayName = p.display_name ?? p.name ?? ([p.first_name, p.middle_name, p.last_name].filter(Boolean).join(" ") || "Unknown");
@@ -544,17 +505,7 @@ function formatProfile(p: {
   return lines.join("\n");
 }
 
-function formatFamilyNode(node: {
-  id: string;
-  display_name?: string;
-  name?: string;
-  first_name?: string;
-  last_name?: string;
-  gender?: string;
-  birth?: GeniEvent;
-  death?: GeniEvent;
-  is_alive?: boolean;
-}): string {
+function formatFamilyNode(node: GeniFamilyNode): string {
   const name = node.display_name ?? node.name ?? ([node.first_name, node.last_name].filter(Boolean).join(" ") || "Unknown");
   const born = formatDate(node.birth?.date);
   const died = formatDate(node.death?.date);
@@ -563,4 +514,19 @@ function formatFamilyNode(node: {
       ? ` (${[born !== "unknown" ? `b. ${born}` : "", died !== "unknown" ? `d. ${died}` : ""].filter(Boolean).join(", ")})`
       : "";
   return `${name}${life} [${node.id}]`;
+}
+
+/** Shared formatter for search results and merge candidates. */
+function formatSearchHit(item: GeniSearchResult | GeniMergeCandidate, badge?: string): string {
+  const name = item.display_name ?? item.name ?? "Unknown";
+  const born = formatEvent(item.birth);
+  const died = formatEvent(item.death);
+  const life =
+    born || died
+      ? ` (${[born ? `b. ${born}` : "", died ? `d. ${died}` : ""].filter(Boolean).join(", ")})`
+      : "";
+  return (
+    `• ${name}${badge ? ` ${badge}` : ""}${life}\n  ID: ${item.id}` +
+    (item.url ? `\n  URL: ${item.url}` : "")
+  );
 }

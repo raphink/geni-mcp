@@ -39,7 +39,7 @@ export class EnvTokenStore implements TokenStore {
   }
 
   getAccessToken(): string | undefined {
-    if (this.expiresAt && Date.now() >= this.expiresAt) {
+    if (this.expiresAt !== undefined && Date.now() >= this.expiresAt) {
       return undefined; // expired
     }
     return this.accessToken;
@@ -52,7 +52,7 @@ export class EnvTokenStore implements TokenStore {
   setTokens(access: string, refresh?: string, expiresIn?: number): void {
     this.accessToken = access;
     if (refresh) this.refreshToken = refresh;
-    if (expiresIn) {
+    if (expiresIn !== undefined) {
       // Subtract 60s buffer so we refresh before actual expiry
       this.expiresAt = Date.now() + (expiresIn - 60) * 1000;
     }
@@ -75,19 +75,24 @@ export function getOAuthConfig(): OAuthConfig {
   return { clientId, clientSecret, redirectUri };
 }
 
+/** Default OAuth scopes requested. Override via GENI_SCOPES env var (space-separated). */
+export const DEFAULT_SCOPES = "basic offline";
+
 /**
  * Build the URL to redirect the user to for authorization.
- * Scopes: basic (required), email, offline (required for refresh token), collaborate (for merges)
+ * Default scopes: basic (profile read), offline (refresh token).
+ * Add "collaborate" for merge support.
  */
 export function buildAuthorizationUrl(
   config: OAuthConfig,
-  state?: string
+  state?: string,
+  scopes: string = process.env.GENI_SCOPES ?? DEFAULT_SCOPES
 ): string {
   const params = new URLSearchParams({
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: "code",
-    scope: "basic email offline collaborate",
+    scope: scopes,
   });
   if (state) params.set("state", state);
   return `${GENI_AUTH_URL}?${params.toString()}`;

@@ -15,6 +15,9 @@ import { refreshAccessToken } from "./oauth.js";
 const GENI_API_BASE = "https://www.geni.com/api";
 
 export class GeniClient {
+  // Coalesces concurrent refresh attempts so only one HTTP call is made.
+  private refreshPromise: Promise<string> | null = null;
+
   constructor(
     private readonly tokenStore: TokenStore,
     private readonly oauthConfig: OAuthConfig
@@ -23,10 +26,19 @@ export class GeniClient {
   // ── Low-level HTTP ──────────────────────────────────────────────────────────
 
   private async getAccessToken(): Promise<string> {
-    let token = this.tokenStore.getAccessToken();
+    const token = this.tokenStore.getAccessToken();
     if (token) return token;
 
-    // Try to refresh
+    // Coalesce concurrent callers onto a single refresh request.
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.doRefresh().finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    return this.refreshPromise;
+  }
+
+  private async doRefresh(): Promise<string> {
     const refreshToken = this.tokenStore.getRefreshToken();
     if (!refreshToken) {
       throw new Error(
@@ -44,12 +56,11 @@ export class GeniClient {
       tokenResponse.refresh_token,
       tokenResponse.expires_in
     );
-    token = tokenResponse.access_token;
-    return token;
+    return tokenResponse.access_token;
   }
 
   private async request<T>(
-    method: string,
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     params?: Record<string, string>,
     body?: unknown
@@ -129,7 +140,7 @@ export class GeniClient {
 
   /** Get a union (couple + children) by union ID. */
   async getUnion(unionId: string): Promise<GeniUnion> {
-    const id = unionId.startsWith("union-") ? unionId : `union-${unionId}`;
+    const id = normalizeUnionId(unionId);
     return this.request<GeniUnion>("GET", `/${id}`);
   }
 
@@ -210,13 +221,23 @@ export class GeniClient {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Normalize an entity ID to the "prefix-XXXX" form. */
+function normalizeId(id: string, prefix: string): string {
+  const fullPrefix = `${prefix}-`;
+  if (id.startsWith(fullPrefix)) return id;
+  return `${fullPrefix}${id}`;
+}
+
 /**
  * Normalize various profile ID formats to the "profile-XXXX" form.
  * Accepts: "profile-123", "123", "g123", "profile-G6000000001234567"
  */
 function normalizeProfileId(id: string): string {
-  if (id.startsWith("profile-")) return id;
-  return `profile-${id}`;
+  return normalizeId(id, "profile");
+}
+
+function normalizeUnionId(id: string): string {
+  return normalizeId(id, "union");
 }
 
 function relationshipEndpoint(rel: RelationshipType): string {
