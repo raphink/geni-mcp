@@ -52,7 +52,20 @@ export class GeniOAuthProvider implements OAuthServerProvider {
   private readonly pendingTokens = new Map<string, PendingToken>();
   private readonly clients = new Map<string, OAuthClientInformationFull>();
 
-  constructor(private readonly serverUrl: string) {}
+  constructor(
+    private readonly serverUrl: string,
+    defaultClient?: { client_id: string; client_secret: string }
+  ) {
+    if (defaultClient) {
+      this.clients.set(defaultClient.client_id, {
+        client_id: defaultClient.client_id,
+        client_secret: defaultClient.client_secret,
+        client_id_issued_at: 0,
+        redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+      });
+      console.log(`[oauth] pre-seeded client ${defaultClient.client_id}`);
+    }
+  }
 
   get clientsStore(): OAuthRegisteredClientsStore {
     return {

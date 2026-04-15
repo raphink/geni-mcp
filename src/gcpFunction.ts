@@ -28,7 +28,8 @@ const envTokenStore = new EnvTokenStore();
 
 const app = express();
 // Trust Cloud Run's load balancer so req.protocol reflects the original scheme.
-app.set("trust proxy", true);
+// Use 1 (not true) to avoid express-rate-limit's permissive trust proxy warning.
+app.set("trust proxy", 1);
 
 // ── OAuth authorization server ────────────────────────────────────────────────
 // Lazily initialize on the first request so we can derive the server URL
@@ -40,7 +41,12 @@ app.use((req, res, next) => {
   if (!authHandler) {
     const serverUrl = `${req.protocol}://${req.get("host")}`;
     console.log(`[init] initializing OAuth provider serverUrl=${serverUrl}`);
-    provider = new GeniOAuthProvider(serverUrl);
+    provider = new GeniOAuthProvider(
+      serverUrl,
+      process.env.GENI_CLIENT_ID && process.env.GENI_CLIENT_SECRET
+        ? { client_id: process.env.GENI_CLIENT_ID, client_secret: process.env.GENI_CLIENT_SECRET }
+        : undefined
+    );
     authHandler = mcpAuthRouter({
       provider,
       issuerUrl: new URL(serverUrl),

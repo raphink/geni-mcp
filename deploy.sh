@@ -24,6 +24,7 @@ gcloud functions deploy "$FUNCTION" \
   --entry-point=geniMcp \
   --trigger-http \
   --allow-unauthenticated \
-  --max-instances=1
+  --max-instances=1 \
+  --set-env-vars="GENI_CLIENT_ID=${GENI_CLIENT_ID},GENI_CLIENT_SECRET=${GENI_CLIENT_SECRET}"
 
 echo "Done."
