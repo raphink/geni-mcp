@@ -19,10 +19,10 @@ const GeniDateSchema = z.object({
 });
 
 const GeniLocationSchema = z.object({
-  city: z.string().optional(),
-  county: z.string().optional(),
-  state: z.string().optional(),
-  country: z.string().optional(),
+  city: z.string().optional().describe("City or town"),
+  county: z.string().optional().describe("County or district"),
+  state: z.string().optional().describe("State or province"),
+  country: z.string().optional().describe("Country name"),
   place_name: z.string().optional().describe("Full place name if city/country not available"),
 });
 
@@ -32,18 +32,18 @@ const GeniEventSchema = z.object({
 });
 
 const ProfileUpdateSchema = z.object({
-  first_name: z.string().optional(),
-  middle_name: z.string().optional(),
-  last_name: z.string().optional(),
+  first_name: z.string().optional().describe("First name"),
+  middle_name: z.string().optional().describe("Middle name"),
+  last_name: z.string().optional().describe("Last (family) name"),
   maiden_name: z.string().optional().describe("Birth surname (for married women)"),
   suffix: z.string().optional().describe("e.g. Jr., Sr., III"),
-  gender: z.enum(["male", "female", "unknown"]).optional(),
-  is_alive: z.boolean().optional(),
+  gender: z.enum(["male", "female", "unknown"]).optional().describe("Gender"),
+  is_alive: z.boolean().optional().describe("Whether the person is living"),
   about_me: z.string().optional().describe("Biography / notes"),
-  birth: GeniEventSchema.optional(),
-  death: GeniEventSchema.optional(),
-  burial: GeniEventSchema.optional(),
-  nationalities: z.array(z.string()).optional(),
+  birth: GeniEventSchema.optional().describe("Birth date and place"),
+  death: GeniEventSchema.optional().describe("Death date and place"),
+  burial: GeniEventSchema.optional().describe("Burial date and place"),
+  nationalities: z.array(z.string()).optional().describe("List of nationalities"),
 });
 
 // ── Tool result helpers ───────────────────────────────────────────────────────
@@ -212,14 +212,14 @@ export const tools: ToolDefinition[] = [
       "Use add_relation to link the new profile to an existing family member instead.",
     inputSchema: z.object({
       first_name: z.string().describe("First name (required)"),
-      last_name: z.string().optional(),
-      middle_name: z.string().optional(),
-      maiden_name: z.string().optional(),
-      gender: z.enum(["male", "female", "unknown"]).optional(),
-      is_alive: z.boolean().optional(),
-      birth: GeniEventSchema.optional(),
-      death: GeniEventSchema.optional(),
-      about_me: z.string().optional(),
+      last_name: z.string().optional().describe("Last (family) name"),
+      middle_name: z.string().optional().describe("Middle name"),
+      maiden_name: z.string().optional().describe("Birth surname (for married women)"),
+      gender: z.enum(["male", "female", "unknown"]).optional().describe("Gender"),
+      is_alive: z.boolean().optional().describe("Whether the person is living"),
+      birth: GeniEventSchema.optional().describe("Birth date and place"),
+      death: GeniEventSchema.optional().describe("Death date and place"),
+      about_me: z.string().optional().describe("Biography / notes"),
     }),
     async handler(input, { client }) {
       const data = input as { first_name: string } & z.infer<typeof ProfileUpdateSchema>;
@@ -259,7 +259,7 @@ export const tools: ToolDefinition[] = [
 
       for (const [id, node] of Object.entries(family.nodes)) {
         if (id === family.focus.id) continue;
-        const rel = node.relationship ?? "unknown";
+        const rel = node.relationship ?? family.edges?.[id]?.rel ?? "unknown";
         if (!groups[rel]) groups[rel] = [];
         groups[rel].push(formatFamilyNode(node));
       }
@@ -325,14 +325,14 @@ export const tools: ToolDefinition[] = [
       new_person: z
         .object({
           first_name: z.string().describe("First name (required)"),
-          last_name: z.string().optional(),
-          middle_name: z.string().optional(),
-          maiden_name: z.string().optional(),
-          gender: z.enum(["male", "female", "unknown"]).optional(),
-          is_alive: z.boolean().optional(),
-          birth: GeniEventSchema.optional(),
-          death: GeniEventSchema.optional(),
-          about_me: z.string().optional(),
+          last_name: z.string().optional().describe("Last (family) name"),
+          middle_name: z.string().optional().describe("Middle name"),
+          maiden_name: z.string().optional().describe("Birth surname (for married women)"),
+          gender: z.enum(["male", "female", "unknown"]).optional().describe("Gender"),
+          is_alive: z.boolean().optional().describe("Whether the person is living"),
+          birth: GeniEventSchema.optional().describe("Birth date and place"),
+          death: GeniEventSchema.optional().describe("Death date and place"),
+          about_me: z.string().optional().describe("Biography / notes"),
         })
         .describe("Data for the new family member"),
     }),
