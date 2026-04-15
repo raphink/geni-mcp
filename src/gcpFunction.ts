@@ -48,7 +48,8 @@ app.use((req, res, next) => {
       scopesSupported: ["basic", "offline", "collaborate"],
     });
   }
-  console.log(`[req] ${req.method} ${req.path}`);
+  console.log(`[req] ${req.method} ${req.path} auth=${req.headers["authorization"] ? "present" : "none"}`);
+  res.on("finish", () => console.log(`[res] ${req.method} ${req.path} status=${res.statusCode}`));
   authHandler(req, res, next);
 });
 
@@ -70,6 +71,7 @@ app.post("/mcp", express.json({ limit: "1mb" }), async (req, res) => {
   const bearerToken = authHeader?.startsWith("Bearer ")
     ? authHeader.slice(7)
     : undefined;
+  console.log(`[mcp] POST /mcp bearerToken=${bearerToken ? "present" : "none"}`);
 
   const tokenStore = bearerToken
     ? {
@@ -89,8 +91,15 @@ app.post("/mcp", express.json({ limit: "1mb" }), async (req, res) => {
     server.close().catch(() => {});
   });
 
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body ?? {});
+  try {
+    await server.connect(transport);
+    console.log(`[mcp] server connected, handling request`);
+    await transport.handleRequest(req, res, req.body ?? {});
+    console.log(`[mcp] request handled`);
+  } catch (err) {
+    console.error(`[mcp] error:`, err);
+    if (!res.headersSent) res.status(500).json({ error: String(err) });
+  }
 });
 
 // ── Health check ──────────────────────────────────────────────────────────────
