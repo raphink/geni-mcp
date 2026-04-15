@@ -241,15 +241,17 @@ export const tools: ToolDefinition[] = [
       const { profile_id } = input as { profile_id: string };
       const family = await client.getImmediateFamily(profile_id);
 
+      console.log(`[get_immediate_family] focus=${family.focus.id} nodes=${Object.keys(family.nodes).join(",")} edges=${JSON.stringify(family.edges)}`);
+
       const lines: string[] = [
         `Immediate family of: ${family.focus.display_name ?? family.focus.name ?? family.focus.id}`,
         "",
       ];
 
-      // Group by relationship
+      // Group by relationship — Geni returns "parent" (not "father"/"mother"),
+      // "child", "sibling", "half_sibling", "spouse", "partner".
       const groups: Record<string, string[]> = {
-        father: [],
-        mother: [],
+        parent: [],
         spouse: [],
         partner: [],
         sibling: [],
@@ -265,8 +267,7 @@ export const tools: ToolDefinition[] = [
       }
 
       const labels: Record<string, string> = {
-        father: "Father",
-        mother: "Mother",
+        parent: "Parent",
         spouse: "Spouse",
         partner: "Partner",
         sibling: "Sibling",
@@ -278,6 +279,15 @@ export const tools: ToolDefinition[] = [
         if (groups[rel]?.length) {
           lines.push(`**${label}${groups[rel].length > 1 ? "s" : ""}:**`);
           for (const entry of groups[rel]) lines.push(`  • ${entry}`);
+          lines.push("");
+        }
+      }
+
+      // Dump any unexpected relationship types for debugging
+      for (const [rel, entries] of Object.entries(groups)) {
+        if (!labels[rel] && entries.length) {
+          lines.push(`**${rel}:**`);
+          for (const entry of entries) lines.push(`  • ${entry}`);
           lines.push("");
         }
       }
