@@ -39,6 +39,7 @@ let authHandler: express.RequestHandler | null = null;
 app.use((req, res, next) => {
   if (!authHandler) {
     const serverUrl = `${req.protocol}://${req.get("host")}`;
+    console.log(`[init] initializing OAuth provider serverUrl=${serverUrl}`);
     provider = new GeniOAuthProvider(serverUrl);
     authHandler = mcpAuthRouter({
       provider,
@@ -47,6 +48,7 @@ app.use((req, res, next) => {
       scopesSupported: ["basic", "offline", "collaborate"],
     });
   }
+  console.log(`[req] ${req.method} ${req.path}`);
   authHandler(req, res, next);
 });
 

@@ -56,7 +56,11 @@ export class GeniOAuthProvider implements OAuthServerProvider {
 
   get clientsStore(): OAuthRegisteredClientsStore {
     return {
-      getClient: async (clientId: string) => this.clients.get(clientId),
+      getClient: async (clientId: string) => {
+        const client = this.clients.get(clientId);
+        console.log(`[oauth] getClient ${clientId} → ${client ? "found" : "not found"}`);
+        return client;
+      },
 
       registerClient: async (
         client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">
@@ -71,6 +75,7 @@ export class GeniOAuthProvider implements OAuthServerProvider {
           client_id_issued_at: Math.floor(Date.now() / 1000),
         };
         this.clients.set(full.client_id, full);
+        console.log(`[oauth] registerClient submitted=${submittedId ?? "(none)"} assigned=${full.client_id} hasSecret=${!!full.client_secret}`);
         return full;
       },
     };
@@ -99,6 +104,7 @@ export class GeniOAuthProvider implements OAuthServerProvider {
       scope: GENI_SCOPES,
       state: geniState,
     });
+    console.log(`[oauth] authorize client=${client.client_id} geniState=${geniState} redirectUri=${params.redirectUri}`);
     res.redirect(`${GENI_AUTH_URL}?${qs}`);
   }
 
@@ -106,7 +112,9 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     code: string
   ): Promise<string> {
-    return this.pendingTokens.get(code)?.codeChallenge ?? "";
+    const challenge = this.pendingTokens.get(code)?.codeChallenge ?? "";
+    console.log(`[oauth] challengeForAuthorizationCode code=${code.slice(0, 8)}… found=${!!challenge}`);
+    return challenge;
   }
 
   async exchangeAuthorizationCode(
@@ -117,8 +125,12 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     _resource?: URL
   ): Promise<OAuthTokens> {
     const pending = this.pendingTokens.get(code);
-    if (!pending) throw new Error("Invalid or expired authorization code");
+    if (!pending) {
+      console.error(`[oauth] exchangeAuthorizationCode code=${code.slice(0, 8)}… not found`);
+      throw new Error("Invalid or expired authorization code");
+    }
     this.pendingTokens.delete(code);
+    console.log(`[oauth] exchangeAuthorizationCode code=${code.slice(0, 8)}… ok`);
     return pending.geniTokens;
   }
 
@@ -128,6 +140,7 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     _scopes?: string[],
     _resource?: URL
   ): Promise<OAuthTokens> {
+    console.log(`[oauth] exchangeRefreshToken client=${client.client_id}`);
     return this.callGeniToken({
       grant_type: "refresh_token",
       client_id: client.client_id,
@@ -140,8 +153,12 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     const url = new URL(`${GENI_API_BASE}/profile`);
     url.searchParams.set("access_token", token);
     const res = await fetch(url.toString());
-    if (!res.ok) throw new Error(`Token verification failed: ${res.status}`);
+    if (!res.ok) {
+      console.error(`[oauth] verifyAccessToken failed status=${res.status}`);
+      throw new Error(`Token verification failed: ${res.status}`);
+    }
     const profile = await res.json() as { id?: string };
+    console.log(`[oauth] verifyAccessToken ok profileId=${profile.id}`);
     return {
       token,
       clientId: "geni",
@@ -157,24 +174,30 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     geniState: string | undefined,
     res: Response
   ): Promise<void> {
+    console.log(`[oauth] handleGeniCallback geniState=${geniState} code=${code ? "present" : "missing"} error=${error ?? "none"}`);
     if (error) {
+      console.error(`[oauth] handleGeniCallback error from Geni: ${error}`);
       res.status(400).send(`<h2>Authorization failed</h2><p>${escapeHtml(error)}</p>`);
       return;
     }
     if (!code || !geniState) {
+      console.error(`[oauth] handleGeniCallback missing code or state`);
       res.status(400).send("<h2>Missing code or state parameter</h2>");
       return;
     }
 
     const pending = this.pendingAuths.get(geniState);
     if (!pending || Date.now() > pending.expiresAt) {
+      console.error(`[oauth] handleGeniCallback unknown/expired geniState=${geniState} pendingAuths.size=${this.pendingAuths.size}`);
       this.pendingAuths.delete(geniState);
       res.status(400).send("<h2>Unknown or expired authorization session</h2>");
       return;
     }
     this.pendingAuths.delete(geniState);
+    console.log(`[oauth] handleGeniCallback found pending for clientId=${pending.clientId}`);
 
     const client = await this.clientsStore.getClient(pending.clientId);
+    console.log(`[oauth] handleGeniCallback client lookup: ${client ? "found" : "not found"} hasSecret=${!!client?.client_secret}`);
 
     let geniTokens: OAuthTokens;
     try {
@@ -185,8 +208,10 @@ export class GeniOAuthProvider implements OAuthServerProvider {
         redirect_uri: `${this.serverUrl}/oauth/callback`,
         code,
       });
+      console.log(`[oauth] handleGeniCallback token exchange ok hasRefresh=${!!geniTokens.refresh_token}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[oauth] handleGeniCallback token exchange failed: ${msg}`);
       res.status(500).send(`<h2>Token exchange failed</h2><p>${escapeHtml(msg)}</p>`);
       return;
     }
@@ -201,10 +226,12 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     const redirectUrl = new URL(pending.redirectUri);
     redirectUrl.searchParams.set("code", mcpCode);
     if (pending.state) redirectUrl.searchParams.set("state", pending.state);
+    console.log(`[oauth] handleGeniCallback redirecting to ${pending.redirectUri}`);
     res.redirect(redirectUrl.toString());
   }
 
   private async callGeniToken(params: Record<string, string>): Promise<OAuthTokens> {
+    console.log(`[oauth] callGeniToken grant_type=${params["grant_type"]} client_id=${params["client_id"]}`);
     const res = await fetch(GENI_TOKEN_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
