@@ -23,6 +23,7 @@ gcloud functions deploy "$FUNCTION" \
   --source=. \
   --entry-point=geniMcp \
   --trigger-http \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --max-instances=1
 
 echo "Done."

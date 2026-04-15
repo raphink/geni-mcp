@@ -1,11 +1,16 @@
 // GeniOAuthProvider — MCP OAuth 2.0 Authorization Server backed by Geni OAuth.
 //
+// The Geni app credentials (client_id / client_secret) are NOT stored as env vars.
+// Instead, they are provided by the connecting client (e.g. Claude.ai) during the
+// OAuth flow — the client_id and client_secret registered with this server are
+// the same credentials used to call Geni's OAuth endpoints.
+//
 // Flow:
-//  1. Claude.ai → GET /authorize  (MCP auth router handles this, calls provider.authorize)
-//  2. provider.authorize → stores PKCE/state, redirects to Geni's OAuth
+//  1. Claude.ai → GET /authorize  (MCP auth router, calls provider.authorize)
+//  2. provider.authorize → stores PKCE/state, redirects to Geni OAuth
 //  3. Geni → GET /oauth/callback  (gcpFunction route, calls provider.handleGeniCallback)
 //  4. handleGeniCallback → exchanges code with Geni, generates MCP code, redirects to Claude.ai
-//  5. Claude.ai → POST /token  (MCP auth router handles this, SDK validates PKCE, calls provider.exchangeAuthorizationCode)
+//  5. Claude.ai → POST /token  (MCP auth router, SDK validates PKCE, calls provider.exchangeAuthorizationCode)
 //  6. provider.exchangeAuthorizationCode → returns Geni tokens to Claude.ai
 //  7. Claude.ai → POST /mcp with Bearer <geni_access_token>
 //  8. provider.verifyAccessToken → verifies against Geni API
@@ -16,19 +21,20 @@ import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprot
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { buildAuthorizationUrl, exchangeCodeForTokens, refreshAccessToken } from "./oauth.js";
-import type { OAuthConfig } from "./oauth.js";
 
+const GENI_AUTH_URL = "https://www.geni.com/oauth/authorize";
+const GENI_TOKEN_URL = "https://www.geni.com/oauth/token";
 const GENI_API_BASE = "https://www.geni.com/api";
+const GENI_SCOPES = "basic offline";
 
 // TTL for pending entries (10 minutes)
 const PENDING_TTL_MS = 10 * 60 * 1000;
 
 interface PendingAuth {
+  clientId: string;       // The registered client — used to look up Geni credentials
   codeChallenge: string;
   redirectUri: string;
   state?: string;
-  clientId: string;
   expiresAt: number;
 }
 
@@ -39,32 +45,32 @@ interface PendingToken {
 }
 
 export class GeniOAuthProvider implements OAuthServerProvider {
-  // SDK validates PKCE locally using challengeForAuthorizationCode() — no need to forward code_verifier to Geni.
+  // SDK validates PKCE locally — no need to forward code_verifier to Geni.
   readonly skipLocalPkceValidation = false;
 
-  private readonly pendingAuths = new Map<string, PendingAuth>();  // geniState → pending auth
-  private readonly pendingTokens = new Map<string, PendingToken>(); // mcpCode → pending token
-  private readonly registeredClients = new Map<string, OAuthClientInformationFull>();
+  private readonly pendingAuths = new Map<string, PendingAuth>();
+  private readonly pendingTokens = new Map<string, PendingToken>();
+  private readonly clients = new Map<string, OAuthClientInformationFull>();
 
-  constructor(
-    private readonly oauthConfig: OAuthConfig,
-    private readonly serverUrl: string
-  ) {}
+  constructor(private readonly serverUrl: string) {}
 
   get clientsStore(): OAuthRegisteredClientsStore {
     return {
-      getClient: async (clientId: string) =>
-        this.registeredClients.get(clientId),
+      getClient: async (clientId: string) => this.clients.get(clientId),
 
       registerClient: async (
         client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">
       ): Promise<OAuthClientInformationFull> => {
+        // The TypeScript type omits client_id, but RFC 7591 allows clients to
+        // submit their own. Claude passes the Geni OAuth client_id here so we
+        // must preserve it rather than replace it with a random UUID.
+        const submittedId = (client as Record<string, unknown>)["client_id"] as string | undefined;
         const full: OAuthClientInformationFull = {
           ...client,
-          client_id: crypto.randomUUID(),
+          client_id: submittedId ?? crypto.randomUUID(),
           client_id_issued_at: Math.floor(Date.now() / 1000),
         };
-        this.registeredClients.set(full.client_id, full);
+        this.clients.set(full.client_id, full);
         return full;
       },
     };
@@ -79,15 +85,21 @@ export class GeniOAuthProvider implements OAuthServerProvider {
 
     const geniState = crypto.randomUUID();
     this.pendingAuths.set(geniState, {
+      clientId: client.client_id,
       codeChallenge: params.codeChallenge,
       redirectUri: params.redirectUri,
       state: params.state,
-      clientId: client.client_id,
       expiresAt: Date.now() + PENDING_TTL_MS,
     });
 
-    const config = { ...this.oauthConfig, redirectUri: `${this.serverUrl}/oauth/callback` };
-    res.redirect(buildAuthorizationUrl(config, geniState));
+    const qs = new URLSearchParams({
+      client_id: client.client_id,
+      redirect_uri: `${this.serverUrl}/oauth/callback`,
+      response_type: "code",
+      scope: GENI_SCOPES,
+      state: geniState,
+    });
+    res.redirect(`${GENI_AUTH_URL}?${qs}`);
   }
 
   async challengeForAuthorizationCode(
@@ -111,27 +123,24 @@ export class GeniOAuthProvider implements OAuthServerProvider {
   }
 
   async exchangeRefreshToken(
-    _client: OAuthClientInformationFull,
+    client: OAuthClientInformationFull,
     refreshToken: string,
     _scopes?: string[],
     _resource?: URL
   ): Promise<OAuthTokens> {
-    const raw = await refreshAccessToken(this.oauthConfig, refreshToken);
-    return {
-      access_token: raw.access_token,
-      token_type: "Bearer",
-      ...(raw.refresh_token && { refresh_token: raw.refresh_token }),
-      ...(raw.expires_in !== undefined && { expires_in: raw.expires_in }),
-    };
+    return this.callGeniToken({
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      client_secret: client.client_secret ?? "",
+      refresh_token: refreshToken,
+    });
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const url = new URL(`${GENI_API_BASE}/profile`);
     url.searchParams.set("access_token", token);
     const res = await fetch(url.toString());
-    if (!res.ok) {
-      throw new Error(`Token verification failed: ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`Token verification failed: ${res.status}`);
     const profile = await res.json() as { id?: string };
     return {
       token,
@@ -165,16 +174,17 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     }
     this.pendingAuths.delete(geniState);
 
-    const config = { ...this.oauthConfig, redirectUri: `${this.serverUrl}/oauth/callback` };
+    const client = await this.clientsStore.getClient(pending.clientId);
+
     let geniTokens: OAuthTokens;
     try {
-      const raw = await exchangeCodeForTokens(config, code);
-      geniTokens = {
-        access_token: raw.access_token,
-        token_type: "Bearer",
-        ...(raw.refresh_token && { refresh_token: raw.refresh_token }),
-        ...(raw.expires_in !== undefined && { expires_in: raw.expires_in }),
-      };
+      geniTokens = await this.callGeniToken({
+        grant_type: "authorization_code",
+        client_id: pending.clientId,
+        client_secret: client?.client_secret ?? "",
+        redirect_uri: `${this.serverUrl}/oauth/callback`,
+        code,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).send(`<h2>Token exchange failed</h2><p>${escapeHtml(msg)}</p>`);
@@ -194,21 +204,32 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     res.redirect(redirectUrl.toString());
   }
 
+  private async callGeniToken(params: Record<string, string>): Promise<OAuthTokens> {
+    const res = await fetch(GENI_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString(),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Geni token request failed (${res.status}): ${text}`);
+    }
+    const data = await res.json() as Record<string, unknown>;
+    return {
+      access_token: data["access_token"] as string,
+      token_type: "Bearer",
+      ...(data["refresh_token"] ? { refresh_token: data["refresh_token"] as string } : {}),
+      ...(data["expires_in"] !== undefined ? { expires_in: data["expires_in"] as number } : {}),
+    };
+  }
+
   private evictExpired(): void {
     const now = Date.now();
-    for (const [k, v] of this.pendingAuths) {
-      if (now > v.expiresAt) this.pendingAuths.delete(k);
-    }
-    for (const [k, v] of this.pendingTokens) {
-      if (now > v.expiresAt) this.pendingTokens.delete(k);
-    }
+    for (const [k, v] of this.pendingAuths) if (now > v.expiresAt) this.pendingAuths.delete(k);
+    for (const [k, v] of this.pendingTokens) if (now > v.expiresAt) this.pendingTokens.delete(k);
   }
 }
 
 function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
