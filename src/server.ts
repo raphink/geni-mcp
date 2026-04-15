@@ -14,11 +14,10 @@ export const SERVER_NAME = "geni-mcp";
 export const SERVER_VERSION = "1.0.0";
 
 // Pre-compute the tool manifest once at module load — it never changes.
-const toolManifest = tools.map((t) => ({
-  name: t.name,
-  description: t.description,
-  inputSchema: zodToJsonSchema(t.inputSchema),
-}));
+const toolManifest = tools.map((t) => {
+  const { $schema: _unused, ...inputSchema } = zodToJsonSchema(t.inputSchema) as Record<string, unknown>;
+  return { name: t.name, description: t.description, inputSchema };
+});
 
 // Pre-build a name→tool lookup map for O(1) dispatch.
 const toolMap = new Map(tools.map((t) => [t.name, t]));
