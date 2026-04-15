@@ -51,6 +51,10 @@ export class GeniOAuthProvider implements OAuthServerProvider {
   private readonly pendingAuths = new Map<string, PendingAuth>();
   private readonly pendingTokens = new Map<string, PendingToken>();
   private readonly clients = new Map<string, OAuthClientInformationFull>();
+  // Geni credentials keyed by client_id — used to call Geni's token endpoint.
+  // Stored separately so the MCP client entry has no client_secret, allowing
+  // Claude to authenticate via PKCE alone (public client).
+  private readonly geniSecrets = new Map<string, string>();
 
   constructor(
     private readonly serverUrl: string,
@@ -59,10 +63,10 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     if (defaultClient) {
       this.clients.set(defaultClient.client_id, {
         client_id: defaultClient.client_id,
-        client_secret: defaultClient.client_secret,
         client_id_issued_at: 0,
         redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
       });
+      this.geniSecrets.set(defaultClient.client_id, defaultClient.client_secret);
       console.log(`[oauth] pre-seeded client ${defaultClient.client_id}`);
     }
   }
@@ -86,9 +90,11 @@ export class GeniOAuthProvider implements OAuthServerProvider {
           ...client,
           client_id: submittedId ?? crypto.randomUUID(),
           client_id_issued_at: Math.floor(Date.now() / 1000),
+          client_secret: undefined,
         };
+        if (client.client_secret) this.geniSecrets.set(full.client_id, client.client_secret);
         this.clients.set(full.client_id, full);
-        console.log(`[oauth] registerClient submitted=${submittedId ?? "(none)"} assigned=${full.client_id} hasSecret=${!!full.client_secret}`);
+        console.log(`[oauth] registerClient submitted=${submittedId ?? "(none)"} assigned=${full.client_id} hasSecret=${!!client.client_secret}`);
         return full;
       },
     };
@@ -157,7 +163,7 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     return this.callGeniToken({
       grant_type: "refresh_token",
       client_id: client.client_id,
-      client_secret: client.client_secret ?? "",
+      client_secret: this.geniSecrets.get(client.client_id) ?? "",
       refresh_token: refreshToken,
     });
   }
@@ -210,14 +216,14 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     console.log(`[oauth] handleGeniCallback found pending for clientId=${pending.clientId}`);
 
     const client = await this.clientsStore.getClient(pending.clientId);
-    console.log(`[oauth] handleGeniCallback client lookup: ${client ? "found" : "not found"} hasSecret=${!!client?.client_secret}`);
+    console.log(`[oauth] handleGeniCallback client lookup: ${client ? "found" : "not found"} hasSecret=${!!this.geniSecrets.get(pending.clientId)}`);
 
     let geniTokens: OAuthTokens;
     try {
       geniTokens = await this.callGeniToken({
         grant_type: "authorization_code",
         client_id: pending.clientId,
-        client_secret: client?.client_secret ?? "",
+        client_secret: this.geniSecrets.get(pending.clientId) ?? "",
         redirect_uri: `${this.serverUrl}/oauth/callback`,
         code,
       });
