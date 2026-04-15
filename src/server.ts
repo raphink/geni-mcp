@@ -15,7 +15,7 @@ export const SERVER_VERSION = "1.0.0";
 
 // Pre-compute the tool manifest once at module load — it never changes.
 const toolManifest = tools.map((t) => {
-  const { $schema: _unused, ...inputSchema } = zodToJsonSchema(t.inputSchema) as Record<string, unknown>;
+  const { $schema: _unused, ...inputSchema } = zodToJsonSchema(t.inputSchema, { $refStrategy: "none" }) as Record<string, unknown>;
   return { name: t.name, description: t.description, inputSchema };
 });
 
