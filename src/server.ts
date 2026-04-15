@@ -25,7 +25,7 @@ const toolMap = new Map(tools.map((t) => [t.name, t]));
 
 export function createMcpServer(
   tokenStore: TokenStore,
-  oauthConfig: OAuthConfig
+  oauthConfig: OAuthConfig | null
 ): Server {
   const client = new GeniClient(tokenStore, oauthConfig);
 

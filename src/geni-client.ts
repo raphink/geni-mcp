@@ -20,7 +20,7 @@ export class GeniClient {
 
   constructor(
     private readonly tokenStore: TokenStore,
-    private readonly oauthConfig: OAuthConfig
+    private readonly oauthConfig: OAuthConfig | null
   ) {}
 
   // ── Low-level HTTP ──────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ export class GeniClient {
 
   private async doRefresh(): Promise<string> {
     const refreshToken = this.tokenStore.getRefreshToken();
-    if (!refreshToken) {
+    if (!refreshToken || !this.oauthConfig) {
       throw new Error(
         "No valid access token available. Run the OAuth flow first: " +
           "use the 'get_authorization_url' tool, visit the URL, then call 'exchange_code' with the returned code."

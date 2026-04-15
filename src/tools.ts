@@ -101,7 +101,7 @@ export interface ToolDefinition {
 export interface ToolContext {
   client: GeniClient;
   tokenStore: TokenStore;
-  oauthConfig: OAuthConfig;
+  oauthConfig: OAuthConfig | null;
 }
 
 export const tools: ToolDefinition[] = [
@@ -115,6 +115,7 @@ export const tools: ToolDefinition[] = [
       "Pass that code to 'exchange_code' to complete authentication.",
     inputSchema: z.object({}),
     async handler(_input, { oauthConfig }) {
+      if (!oauthConfig) return { content: [{ type: "text" as const, text: "OAuth is managed externally — no client credentials configured on this server." }], isError: true };
       const url = buildAuthorizationUrl(oauthConfig);
       return ok(
         `Visit this URL to authorize access to your Geni account:\n\n${url}\n\n` +
@@ -133,6 +134,7 @@ export const tools: ToolDefinition[] = [
       code: z.string().describe("The authorization code from the Geni callback URL"),
     }),
     async handler(input, { tokenStore, oauthConfig }) {
+      if (!oauthConfig) return { content: [{ type: "text" as const, text: "OAuth is managed externally — no client credentials configured on this server." }], isError: true };
       const { code } = input as { code: string };
       const tokens = await exchangeCodeForTokens(oauthConfig, code);
       tokenStore.setTokens(
