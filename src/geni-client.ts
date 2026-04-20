@@ -13,6 +13,9 @@ import type { OAuthConfig, TokenStore } from "./oauth.js";
 import { refreshAccessToken } from "./oauth.js";
 
 const GENI_API_BASE = "https://www.geni.com/api";
+const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 40;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 10_000;
+const DEFAULT_MAX_429_RETRIES = 3;
 const PROFILE_FIELDS = [
   "id",
   "guid",
@@ -47,6 +50,18 @@ const PROFILE_FIELDS = [
 export class GeniClient {
   // Coalesces concurrent refresh attempts so only one HTTP call is made.
   private refreshPromise: Promise<string> | null = null;
+  // Serializes rate-limit accounting across concurrent requests.
+  private rateLimitQueue: Promise<void> = Promise.resolve();
+  private requestTimestamps: number[] = [];
+  private readonly rateLimitMaxRequests = Number(
+    process.env.GENI_RATE_LIMIT_MAX_REQUESTS ?? DEFAULT_RATE_LIMIT_MAX_REQUESTS
+  );
+  private readonly rateLimitWindowMs = Number(
+    process.env.GENI_RATE_LIMIT_WINDOW_MS ?? DEFAULT_RATE_LIMIT_WINDOW_MS
+  );
+  private readonly max429Retries = Number(
+    process.env.GENI_MAX_429_RETRIES ?? DEFAULT_MAX_429_RETRIES
+  );
 
   constructor(
     private readonly tokenStore: TokenStore,
@@ -96,7 +111,6 @@ export class GeniClient {
     body?: unknown
   ): Promise<T> {
     const token = await this.getAccessToken();
-
     const url = new URL(`${GENI_API_BASE}${path}`);
     url.searchParams.set("access_token", token);
     if (params) {
@@ -111,21 +125,67 @@ export class GeniClient {
       init.body = JSON.stringify(body);
     }
 
-    const res = await fetch(url.toString(), init);
+    for (let attempt = 0; ; attempt++) {
+      await this.acquireRateLimitSlot();
+      const res = await fetch(url.toString(), init);
 
-    if (!res.ok) {
-      const text = await res.text();
-      let msg = `Geni API error ${res.status}`;
-      try {
-        const json = JSON.parse(text) as { error?: string; message?: string };
-        msg += `: ${json.error ?? json.message ?? text}`;
-      } catch {
-        msg += `: ${text}`;
+      if (res.status === 429 && attempt < this.max429Retries) {
+        const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+        const waitMs = retryAfterMs ?? computeBackoffMs(attempt);
+        await sleep(waitMs);
+        continue;
       }
-      throw new Error(msg);
-    }
 
-    return res.json() as Promise<T>;
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = `Geni API error ${res.status}`;
+        try {
+          const json = JSON.parse(text) as { error?: string; message?: string };
+          msg += `: ${json.error ?? json.message ?? text}`;
+        } catch {
+          msg += `: ${text}`;
+        }
+        throw new Error(msg);
+      }
+
+      return res.json() as Promise<T>;
+    }
+  }
+
+  private async acquireRateLimitSlot(): Promise<void> {
+    if (this.rateLimitMaxRequests <= 0 || this.rateLimitWindowMs <= 0) return;
+
+    let releaseQueue: (() => void) | undefined;
+    const nextQueue = new Promise<void>((resolve) => {
+      releaseQueue = resolve;
+    });
+
+    const prevQueue = this.rateLimitQueue;
+    this.rateLimitQueue = prevQueue.then(() => nextQueue);
+
+    await prevQueue;
+    try {
+      while (true) {
+        const now = Date.now();
+        this.requestTimestamps = this.requestTimestamps.filter(
+          (ts) => now - ts < this.rateLimitWindowMs
+        );
+
+        if (this.requestTimestamps.length < this.rateLimitMaxRequests) {
+          this.requestTimestamps.push(now);
+          return;
+        }
+
+        const earliest = this.requestTimestamps[0] ?? now;
+        const waitMs = Math.max(
+          1,
+          this.rateLimitWindowMs - (now - earliest) + 1
+        );
+        await sleep(waitMs);
+      }
+    } finally {
+      releaseQueue?.();
+    }
   }
 
   // ── Profile endpoints ───────────────────────────────────────────────────────
@@ -285,4 +345,28 @@ function relationshipEndpoint(rel: RelationshipType): string {
     case "spouse":
       return "add-spouse";
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(retryAfterHeader: string | null): number | null {
+  if (!retryAfterHeader) return null;
+
+  const seconds = Number(retryAfterHeader);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds * 1000);
+  }
+
+  const retryAt = Date.parse(retryAfterHeader);
+  if (Number.isNaN(retryAt)) return null;
+
+  return Math.max(0, retryAt - Date.now());
+}
+
+function computeBackoffMs(attempt: number): number {
+  const base = Math.min(1000, 250 * 2 ** attempt);
+  const jitter = Math.floor(Math.random() * 200);
+  return base + jitter;
 }
