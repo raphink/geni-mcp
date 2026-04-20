@@ -507,7 +507,8 @@ function formatProfile(p: GeniProfile): string {
   if (p.unions?.length) lines.push(`Family units: ${p.unions.join(", ")}`);
   if (p.big_tree) lines.push(`Big Tree: yes`);
   if (p.claimed) lines.push(`Claimed: yes`);
-  if (p.url) lines.push(`URL: ${p.url}`);
+  if (p.profile_url) lines.push(`Profile URL: ${p.profile_url}`);
+  else if (p.url) lines.push(`URL: ${p.url}`);
 
   if (p.about_me) {
     lines.push("");

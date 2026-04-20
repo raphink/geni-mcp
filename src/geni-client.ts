@@ -13,6 +13,36 @@ import type { OAuthConfig, TokenStore } from "./oauth.js";
 import { refreshAccessToken } from "./oauth.js";
 
 const GENI_API_BASE = "https://www.geni.com/api";
+const PROFILE_FIELDS = [
+  "id",
+  "guid",
+  "name",
+  "display_name",
+  "first_name",
+  "middle_name",
+  "last_name",
+  "maiden_name",
+  "suffix",
+  "gender",
+  "is_alive",
+  "public",
+  "big_tree",
+  "claimed",
+  "master_profile",
+  "url",
+  "profile_url",
+  "birth",
+  "death",
+  "burial",
+  "baptism",
+  "about_me",
+  "unions",
+  "nationalities",
+  "photo_urls",
+  "created_at",
+  "updated_at",
+  "manager",
+].join(",");
 
 export class GeniClient {
   // Coalesces concurrent refresh attempts so only one HTTP call is made.
@@ -108,7 +138,9 @@ export class GeniClient {
   /** Get a profile by ID (e.g. "profile-123456789" or just "123456789"). */
   async getProfile(profileId: string): Promise<GeniProfile> {
     const id = normalizeProfileId(profileId);
-    return this.request<GeniProfile>("GET", `/${id}`);
+    return this.request<GeniProfile>("GET", `/${id}`, {
+      fields: PROFILE_FIELDS,
+    });
   }
 
   /** Update fields on a profile you manage. */
