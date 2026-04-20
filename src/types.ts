@@ -101,13 +101,16 @@ export interface GeniImmediateFamily {
 }
 
 export interface GeniRelationshipPathStep {
-  id: string;
-  rel?: string;
+  name?: string;
+  relation?: string;
+  url?: string;
 }
 
 export interface GeniRelationshipPathResponse {
   status?: string;
   message?: string;
+  relationship?: string;
+  relations?: GeniRelationshipPathStep[];
   path?: string[];
   relationships?: GeniRelationshipPathStep[];
   nodes?: Record<string, GeniFamilyNode>;

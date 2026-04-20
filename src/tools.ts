@@ -571,17 +571,52 @@ function formatRelationshipPath(
   sourceProfileId: string,
   targetProfileId: string
 ): string {
-  const status = typeof result.status === "string" ? result.status : undefined;
+  const status =
+    typeof result.status === "string" ? result.status.toLowerCase() : undefined;
   const message = typeof result.message === "string" ? result.message : undefined;
 
-  if (status === "running" || /running/i.test(message ?? "")) {
+  if (status === "pending" || status === "running" || /running/i.test(message ?? "")) {
     return (
       `Relationship path search is still running between ${sourceProfileId} and ${targetProfileId}.\n` +
       `Please try again in a few seconds.`
     );
   }
 
+  if (status === "overloaded") {
+    return (
+      `Relationship path search is temporarily overloaded for ${sourceProfileId} -> ${targetProfileId}.\n` +
+      `Please try again shortly.`
+    );
+  }
+
+  if (status === "not found") {
+    return `No relationship path found between ${sourceProfileId} and ${targetProfileId}.`;
+  }
+
   const nodes = result.nodes ?? {};
+
+  if (Array.isArray(result.relations) && result.relations.length > 0) {
+    const lines = [
+      `Relationship path (${result.relations.length - 1} hop${result.relations.length - 1 === 1 ? "" : "s"}):`,
+    ];
+
+    for (const [idx, step] of result.relations.entries()) {
+      const inferredId =
+        step.url?.match(/\/api\/(profile-[^/?#]+)/)?.[1] ??
+        step.url?.match(/\/(profile-[^/?#]+)/)?.[1];
+      const label = step.name ?? inferredId ?? `Step ${idx + 1}`;
+      const rel = idx > 0 && step.relation ? ` (${step.relation})` : "";
+      const idPart = inferredId ? ` [${inferredId}]` : "";
+      lines.push(`${idx + 1}. ${label}${idPart}${rel}`);
+    }
+
+    if (result.relationship) {
+      lines.push("");
+      lines.push(`Relationship: ${result.relationship}`);
+    }
+
+    return lines.join("\n");
+  }
 
   if (Array.isArray(result.path) && result.path.length > 0) {
     const steps = result.path.map((id) => {
@@ -605,17 +640,27 @@ function formatRelationshipPath(
       `Relationship path (${result.relationships.length} step${result.relationships.length === 1 ? "" : "s"}):`,
     ];
     for (const [idx, step] of result.relationships.entries()) {
-      const node = nodes[step.id];
+      const stepId =
+        (step as unknown as { id?: string }).id ??
+        step.url?.match(/\/api\/(profile-[^/?#]+)/)?.[1] ??
+        step.url?.match(/\/(profile-[^/?#]+)/)?.[1] ??
+        "unknown";
+      const node = nodes[stepId];
       const name =
+        step.name ??
         node?.display_name ??
         node?.name ??
         [node?.first_name, node?.last_name].filter(Boolean).join(" ") ??
-        step.id;
+        stepId;
       lines.push(
-        `${idx + 1}. ${name} [${step.id}]${step.rel ? ` (${step.rel})` : ""}`
+        `${idx + 1}. ${name} [${stepId}]${step.relation ? ` (${step.relation})` : ""}`
       );
     }
     return lines.join("\n");
+  }
+
+  if (result.relationship) {
+    return `Relationship: ${result.relationship}`;
   }
 
   if (message) {
