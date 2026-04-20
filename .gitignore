@@ -2,6 +2,6 @@ node_modules/
 dist/
 .env
 *.env.local
-secret.yml
+secrets.yml
 .DS_Store
 deploy.sh
