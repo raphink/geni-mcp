@@ -7,7 +7,16 @@ import {
   buildAuthorizationUrl,
   exchangeCodeForTokens,
 } from "./oauth.js";
-import type { GeniEvent, GeniLocation, GeniDate, GeniProfile, GeniFamilyNode, GeniSearchResult, GeniMergeCandidate } from "./types.js";
+import type {
+  GeniEvent,
+  GeniLocation,
+  GeniDate,
+  GeniProfile,
+  GeniFamilyNode,
+  GeniSearchResult,
+  GeniMergeCandidate,
+  GeniRelationshipPathResponse,
+} from "./types.js";
 
 // ── Zod schemas ──────────────────────────────────────────────────────────────
 
@@ -297,6 +306,34 @@ export const tools: ToolDefinition[] = [
   },
 
   {
+    name: "get_relationship_path",
+    description:
+      "Find the relationship path between two profiles. " +
+      "Geni may return an in-progress state while searching large trees.",
+    inputSchema: z.object({
+      source_profile_id: z
+        .string()
+        .describe("Starting profile ID (e.g. 'profile-123456' or '123456')"),
+      target_profile_id: z
+        .string()
+        .describe("Target profile ID (e.g. 'profile-987654' or '987654')"),
+    }),
+    async handler(input, { client }) {
+      const { source_profile_id, target_profile_id } = input as {
+        source_profile_id: string;
+        target_profile_id: string;
+      };
+      const result = await client.getRelationshipPath(
+        source_profile_id,
+        target_profile_id
+      );
+      return ok(
+        formatRelationshipPath(result, source_profile_id, target_profile_id)
+      );
+    },
+  },
+
+  {
     name: "get_union",
     description:
       "Get a Geni union (family unit: couple + their children) by union ID.",
@@ -527,6 +564,68 @@ function formatFamilyNode(node: GeniFamilyNode): string {
       ? ` (${[born !== "unknown" ? `b. ${born}` : "", died !== "unknown" ? `d. ${died}` : ""].filter(Boolean).join(", ")})`
       : "";
   return `${name}${life} [${node.id}]`;
+}
+
+function formatRelationshipPath(
+  result: GeniRelationshipPathResponse,
+  sourceProfileId: string,
+  targetProfileId: string
+): string {
+  const status = typeof result.status === "string" ? result.status : undefined;
+  const message = typeof result.message === "string" ? result.message : undefined;
+
+  if (status === "running" || /running/i.test(message ?? "")) {
+    return (
+      `Relationship path search is still running between ${sourceProfileId} and ${targetProfileId}.\n` +
+      `Please try again in a few seconds.`
+    );
+  }
+
+  const nodes = result.nodes ?? {};
+
+  if (Array.isArray(result.path) && result.path.length > 0) {
+    const steps = result.path.map((id) => {
+      const node = nodes[id];
+      const name =
+        node?.display_name ??
+        node?.name ??
+        [node?.first_name, node?.last_name].filter(Boolean).join(" ") ??
+        id;
+      return `${name} [${id}]`;
+    });
+
+    return [
+      `Relationship path (${steps.length - 1} hop${steps.length - 1 === 1 ? "" : "s"}):`,
+      ...steps.map((step, i) => `${i + 1}. ${step}`),
+    ].join("\n");
+  }
+
+  if (Array.isArray(result.relationships) && result.relationships.length > 0) {
+    const lines = [
+      `Relationship path (${result.relationships.length} step${result.relationships.length === 1 ? "" : "s"}):`,
+    ];
+    for (const [idx, step] of result.relationships.entries()) {
+      const node = nodes[step.id];
+      const name =
+        node?.display_name ??
+        node?.name ??
+        [node?.first_name, node?.last_name].filter(Boolean).join(" ") ??
+        step.id;
+      lines.push(
+        `${idx + 1}. ${name} [${step.id}]${step.rel ? ` (${step.rel})` : ""}`
+      );
+    }
+    return lines.join("\n");
+  }
+
+  if (message) {
+    return `Relationship path lookup returned: ${message}`;
+  }
+
+  return (
+    `No relationship path found between ${sourceProfileId} and ${targetProfileId}, ` +
+    `or the API returned an unrecognized response format.`
+  );
 }
 
 /** Shared formatter for search results and merge candidates. */

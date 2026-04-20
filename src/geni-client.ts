@@ -4,6 +4,7 @@ import type {
   GeniProfile,
   GeniProfileUpdatePayload,
   GeniImmediateFamily,
+  GeniRelationshipPathResponse,
   GeniUnion,
   GeniSearchResponse,
   GeniMergeCandidatesResponse,
@@ -227,6 +228,19 @@ export class GeniClient {
     return this.request<GeniImmediateFamily>(
       "GET",
       `/${id}/immediate-family`
+    );
+  }
+
+  /** Get the relationship path between two profiles. */
+  async getRelationshipPath(
+    fromProfileId: string,
+    toProfileId: string
+  ): Promise<GeniRelationshipPathResponse> {
+    const from = normalizeProfileId(fromProfileId);
+    const to = normalizeProfileId(toProfileId);
+    return this.request<GeniRelationshipPathResponse>(
+      "GET",
+      `/${from}/path-to/${to}`
     );
   }
 

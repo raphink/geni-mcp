@@ -100,6 +100,20 @@ export interface GeniImmediateFamily {
   edges: Record<string, GeniFamilyEdge>;
 }
 
+export interface GeniRelationshipPathStep {
+  id: string;
+  rel?: string;
+}
+
+export interface GeniRelationshipPathResponse {
+  status?: string;
+  message?: string;
+  path?: string[];
+  relationships?: GeniRelationshipPathStep[];
+  nodes?: Record<string, GeniFamilyNode>;
+  [key: string]: unknown;
+}
+
 export interface GeniUnion {
   id: string;
   partners?: string[];

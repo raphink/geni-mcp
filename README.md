@@ -13,6 +13,7 @@ An MCP (Model Context Protocol) server that gives Claude access to [Geni](https:
 | `update_profile` | Correct names, dates, locations, biography |
 | `create_profile` | Add a new person to Geni |
 | `get_immediate_family` | Get parents, siblings, spouses, children |
+| `get_relationship_path` | Find relationship path between two profiles |
 | `get_union` | Get a family unit (couple + children) |
 | `add_relation` | Add a parent, child, sibling, or spouse |
 | `search_profiles` | Search by name with optional birth/death filters |
