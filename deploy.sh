@@ -3,7 +3,7 @@
 # Usage: ./deploy.sh
 set -euo pipefail
 
-ACCOUNT="raphink@gmail.com"
+ACCOUNT="${GCLOUD_ACCOUNT:-$(gcloud config get-value account 2>/dev/null)}"
 PROJECT="mcp-svcs"
 REGION="europe-west1"
 FUNCTION="geni-mcp"
@@ -25,6 +25,7 @@ gcloud functions deploy "$FUNCTION" \
   --trigger-http \
   --allow-unauthenticated \
   --max-instances=1 \
-  --set-env-vars="GENI_CLIENT_ID=${GENI_CLIENT_ID},GENI_CLIENT_SECRET=${GENI_CLIENT_SECRET}"
+  --remove-env-vars="GENI_CLIENT_ID,GENI_CLIENT_SECRET" \
+  --set-secrets="GENI_CLIENT_ID=GENI_CLIENT_ID:latest,GENI_CLIENT_SECRET=GENI_CLIENT_SECRET:latest"
 
 echo "Done."

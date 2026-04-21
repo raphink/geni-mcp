@@ -20,7 +20,11 @@ import { EnvTokenStore, getOAuthConfig } from "./oauth.js";
 import { GeniOAuthProvider } from "./geni-oauth-provider.js";
 
 const oauthConfig = (() => {
-  try { return getOAuthConfig(); } catch { return null; }
+  try {
+    return getOAuthConfig();
+  } catch {
+    return null;
+  }
 })();
 
 // Fallback token store for env-var tokens (used when no Bearer header is present).
@@ -28,48 +32,44 @@ const envTokenStore = new EnvTokenStore();
 
 const app = express();
 // Trust Cloud Run's load balancer so req.protocol reflects the original scheme.
-// Use 1 (not true) to avoid express-rate-limit's permissive trust proxy warning.
-app.set("trust proxy", 1);
+app.set("trust proxy", true);
 
-// ── OAuth authorization server ────────────────────────────────────────────────
-// Lazily initialize on the first request so we can derive the server URL
-// from the incoming Host header instead of a hard-coded env var.
-let provider: GeniOAuthProvider | null = null;
-let authHandler: express.RequestHandler | null = null;
+// ── OAuth authorization server (requires GENI_CLIENT_ID / GENI_CLIENT_SECRET) ─
+if (oauthConfig) {
+  let provider: GeniOAuthProvider | null = null;
+  let authHandler: express.RequestHandler | null = null;
 
-app.use((req, res, next) => {
-  if (!authHandler) {
-    const serverUrl = `${req.protocol}://${req.get("host")}`;
-    console.log(`[init] initializing OAuth provider serverUrl=${serverUrl}`);
-    provider = new GeniOAuthProvider(
-      serverUrl,
-      process.env.GENI_CLIENT_ID && process.env.GENI_CLIENT_SECRET
-        ? { client_id: process.env.GENI_CLIENT_ID, client_secret: process.env.GENI_CLIENT_SECRET }
-        : undefined
-    );
-    authHandler = mcpAuthRouter({
-      provider,
-      issuerUrl: new URL(serverUrl),
-      resourceName: "Geni Genealogy MCP",
-      scopesSupported: ["basic", "offline", "collaborate"],
-    });
-  }
-  console.log(`[req] ${req.method} ${req.path} auth=${req.headers["authorization"] ? "present" : "none"}`);
-  res.on("finish", () => console.log(`[res] ${req.method} ${req.path} status=${res.statusCode}`));
-  authHandler(req, res, next);
-});
-
-// Geni redirects here after the user grants access.
-app.get("/oauth/callback", (req, res) => {
-  if (!provider) { res.status(500).send("<h2>Not initialized</h2>"); return; }
-  const code = req.query["code"] as string | undefined;
-  const error = req.query["error"] as string | undefined;
-  const state = req.query["state"] as string | undefined;
-  provider.handleGeniCallback(code, error, state, res).catch((err) => {
-    console.error("OAuth callback error:", err);
-    res.status(500).send("<h2>Internal server error</h2>");
+  // Lazily initialize on the first request so we can derive the server URL
+  // from the incoming Host header instead of a hard-coded env var.
+  app.use((req, res, next) => {
+    if (!authHandler) {
+      const serverUrl = `${req.protocol}://${req.get("host")}`;
+      provider = new GeniOAuthProvider(oauthConfig!, serverUrl);
+      authHandler = mcpAuthRouter({
+        provider,
+        issuerUrl: new URL(serverUrl),
+        resourceName: "Geni Genealogy MCP",
+        scopesSupported: ["basic", "offline", "collaborate"],
+      });
+    }
+    authHandler(req, res, next);
   });
-});
+
+  // Geni redirects here after the user grants access.
+  app.get("/oauth/callback", (req, res) => {
+    if (!provider) {
+      res.status(500).send("<h2>Not initialized</h2>");
+      return;
+    }
+    const code = req.query["code"] as string | undefined;
+    const error = req.query["error"] as string | undefined;
+    const state = req.query["state"] as string | undefined;
+    provider.handleGeniCallback(code, error, state, res).catch((err) => {
+      console.error("OAuth callback error:", err);
+      res.status(500).send("<h2>Internal server error</h2>");
+    });
+  });
+}
 
 // ── MCP StreamableHTTP endpoint ───────────────────────────────────────────────
 app.post("/mcp", express.json({ limit: "1mb" }), async (req, res) => {
@@ -77,7 +77,6 @@ app.post("/mcp", express.json({ limit: "1mb" }), async (req, res) => {
   const bearerToken = authHeader?.startsWith("Bearer ")
     ? authHeader.slice(7)
     : undefined;
-  console.log(`[mcp] POST /mcp bearerToken=${bearerToken ? "present" : "none"}`);
 
   const tokenStore = bearerToken
     ? {
@@ -97,15 +96,8 @@ app.post("/mcp", express.json({ limit: "1mb" }), async (req, res) => {
     server.close().catch(() => {});
   });
 
-  try {
-    await server.connect(transport);
-    console.log(`[mcp] server connected, handling request`);
-    await transport.handleRequest(req, res, req.body ?? {});
-    console.log(`[mcp] request handled`);
-  } catch (err) {
-    console.error(`[mcp] error:`, err);
-    if (!res.headersSent) res.status(500).json({ error: String(err) });
-  }
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body ?? {});
 });
 
 // ── Health check ──────────────────────────────────────────────────────────────
