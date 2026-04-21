@@ -102,6 +102,21 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ## Deploying to GCP Cloud Functions
 
+Secrets are stored in [Cloud Secret Manager](https://cloud.google.com/secret-manager). Create them once:
+
+```bash
+echo -n "your_app_id" | gcloud secrets create GENI_CLIENT_ID --data-file=- --project=YOUR_PROJECT
+echo -n "your_app_secret" | gcloud secrets create GENI_CLIENT_SECRET --data-file=- --project=YOUR_PROJECT
+```
+
+Grant the function's service account access to both secrets, then deploy:
+
+```bash
+./deploy.sh
+```
+
+Or manually:
+
 ```bash
 gcloud functions deploy geni-mcp \
   --gen2 \
@@ -111,7 +126,8 @@ gcloud functions deploy geni-mcp \
   --entry-point=geniMcp \
   --trigger-http \
   --allow-unauthenticated \
-  --set-env-vars "GENI_CLIENT_ID=your_app_id,GENI_CLIENT_SECRET=your_app_secret,GENI_REDIRECT_URI=https://YOUR_FUNCTION_URL/oauth/callback"
+  --remove-env-vars="GENI_CLIENT_ID,GENI_CLIENT_SECRET" \
+  --set-secrets="GENI_CLIENT_ID=GENI_CLIENT_ID:latest,GENI_CLIENT_SECRET=GENI_CLIENT_SECRET:latest"
 ```
 
 The function exposes two endpoints:
@@ -131,7 +147,7 @@ The function exposes two endpoints:
 }
 ```
 
-> **Note on token persistence:** Cloud Functions are stateless. For production use, store tokens in [Cloud Secret Manager](https://cloud.google.com/secret-manager) or [Firestore](https://cloud.google.com/firestore) by implementing a custom `TokenStore`.
+> **Note on token persistence:** Cloud Functions are stateless. The OAuth flow issues fresh tokens per session via the built-in MCP OAuth server. `GENI_CLIENT_ID` and `GENI_CLIENT_SECRET` are loaded at runtime from Cloud Secret Manager.
 
 ## First use — OAuth flow
 
