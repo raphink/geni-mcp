@@ -31,40 +31,44 @@ const oauthConfig = (() => {
 const envTokenStore = new EnvTokenStore();
 
 const app = express();
-// Trust Cloud Run's load balancer so req.protocol reflects the original scheme.
-app.set("trust proxy", true);
+// Trust exactly one proxy hop (Cloud Run's load balancer) so req.protocol and
+// req.ip are correct. Using a number (not `true`) satisfies express-rate-limit.
+app.set("trust proxy", 1);
+
+// Derive server URL from environment. On Cloud Run / Cloud Functions gen2 the
+// K_SERVICE env var is set automatically; fall back to SERVER_URL if provided.
+function getServerUrl(): string {
+  if (process.env.SERVER_URL) return process.env.SERVER_URL;
+  const service = process.env.K_SERVICE;
+  const region = process.env.FUNCTION_REGION ?? "europe-west1";
+  const projectNumber = process.env.GOOGLE_CLOUD_PROJECT_NUMBER;
+  if (service && projectNumber) {
+    return `https://${service}-${projectNumber}.${region}.run.app`;
+  }
+  // Fallback: use the known deployed URL
+  return "https://geni-mcp-368386322346.europe-west1.run.app";
+}
 
 // ── OAuth authorization server (requires GENI_CLIENT_ID / GENI_CLIENT_SECRET) ─
+let provider: GeniOAuthProvider | null = null;
 if (oauthConfig) {
-  let provider: GeniOAuthProvider | null = null;
-  let authHandler: express.RequestHandler | null = null;
+  const serverUrl = getServerUrl();
+  provider = new GeniOAuthProvider(oauthConfig, serverUrl);
 
-  // Lazily initialize on the first request so we can derive the server URL
-  // from the incoming Host header instead of a hard-coded env var.
-  app.use((req, res, next) => {
-    if (!authHandler) {
-      const serverUrl = `${req.protocol}://${req.get("host")}`;
-      provider = new GeniOAuthProvider(oauthConfig!, serverUrl);
-      authHandler = mcpAuthRouter({
-        provider,
-        issuerUrl: new URL(serverUrl),
-        resourceName: "Geni Genealogy MCP",
-        scopesSupported: ["basic", "offline", "collaborate"],
-      });
-    }
-    authHandler(req, res, next);
-  });
+  // Create auth router at init time (express-rate-limit requires this).
+  app.use(mcpAuthRouter({
+    provider,
+    issuerUrl: new URL(serverUrl),
+    resourceName: "Geni Genealogy MCP",
+    scopesSupported: ["basic", "offline", "collaborate"],
+  }));
 
   // Geni redirects here after the user grants access.
   app.get("/oauth/callback", (req, res) => {
-    if (!provider) {
-      res.status(500).send("<h2>Not initialized</h2>");
-      return;
-    }
     const code = req.query["code"] as string | undefined;
     const error = req.query["error"] as string | undefined;
     const state = req.query["state"] as string | undefined;
-    provider.handleGeniCallback(code, error, state, res).catch((err) => {
+    provider!.handleGeniCallback(code, error, state, res).catch((err) => {
       console.error("OAuth callback error:", err);
       res.status(500).send("<h2>Internal server error</h2>");
     });

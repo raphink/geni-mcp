@@ -9,8 +9,12 @@
 //  6. provider.exchangeAuthorizationCode → returns Geni tokens to Claude.ai
 //  7. Claude.ai → POST /mcp with Bearer <geni_access_token>
 //  8. provider.verifyAccessToken → verifies against Geni API
+//
+// All state (registered clients, pending auths, pending tokens) is persisted in
+// Firestore so that Cloud Function cold starts don't lose data.
 
 import crypto from "node:crypto";
+import { Firestore } from "@google-cloud/firestore";
 import type { Response } from "express";
 import type { OAuthServerProvider, AuthorizationParams } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
@@ -23,6 +27,11 @@ const GENI_API_BASE = "https://www.geni.com/api";
 
 // TTL for pending entries (10 minutes)
 const PENDING_TTL_MS = 10 * 60 * 1000;
+
+const db = new Firestore({ ignoreUndefinedProperties: true });
+const clientsColl = db.collection("mcp_clients");
+const pendingAuthsColl = db.collection("mcp_pending_auths");
+const pendingTokensColl = db.collection("mcp_pending_tokens");
 
 interface PendingAuth {
   codeChallenge: string;
@@ -42,10 +51,6 @@ export class GeniOAuthProvider implements OAuthServerProvider {
   // SDK validates PKCE locally using challengeForAuthorizationCode() — no need to forward code_verifier to Geni.
   readonly skipLocalPkceValidation = false;
 
-  private readonly pendingAuths = new Map<string, PendingAuth>();  // geniState → pending auth
-  private readonly pendingTokens = new Map<string, PendingToken>(); // mcpCode → pending token
-  private readonly registeredClients = new Map<string, OAuthClientInformationFull>();
-
   constructor(
     private readonly oauthConfig: OAuthConfig,
     private readonly serverUrl: string
@@ -53,8 +58,33 @@ export class GeniOAuthProvider implements OAuthServerProvider {
 
   get clientsStore(): OAuthRegisteredClientsStore {
     return {
-      getClient: async (clientId: string) =>
-        this.registeredClients.get(clientId),
+      getClient: async (clientId: string) => {
+        try {
+          const doc = await clientsColl.doc(clientId).get();
+          if (doc.exists) return doc.data() as OAuthClientInformationFull;
+
+          // Claude (and other MCP clients) may cache a client_id from a previous
+          // registration that was lost. Auto-register it so the flow can proceed.
+          // Use a well-known set of redirect URIs for known MCP clients.
+          console.warn(`Unknown client_id ${clientId}, auto-registering`);
+          const stub: OAuthClientInformationFull = {
+            client_id: clientId,
+            client_id_issued_at: Math.floor(Date.now() / 1000),
+            redirect_uris: [
+              "https://claude.ai/api/mcp/auth_callback",
+              "http://localhost",
+            ],
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+          };
+          await clientsColl.doc(clientId).set(stub);
+          return stub;
+        } catch (err) {
+          console.error("Firestore getClient error:", err);
+          throw err;
+        }
+      },
 
       registerClient: async (
         client: Omit<OAuthClientInformationFull, "client_id" | "client_id_issued_at">
@@ -64,7 +94,12 @@ export class GeniOAuthProvider implements OAuthServerProvider {
           client_id: crypto.randomUUID(),
           client_id_issued_at: Math.floor(Date.now() / 1000),
         };
-        this.registeredClients.set(full.client_id, full);
+        try {
+          await clientsColl.doc(full.client_id).set(full);
+        } catch (err) {
+          console.error("Firestore registerClient error:", err);
+          throw err;
+        }
         return full;
       },
     };
@@ -75,16 +110,15 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response
   ): Promise<void> {
-    this.evictExpired();
-
     const geniState = crypto.randomUUID();
-    this.pendingAuths.set(geniState, {
+    const pending: PendingAuth = {
       clientId: client.client_id,
       codeChallenge: params.codeChallenge,
       redirectUri: params.redirectUri,
       state: params.state,
       expiresAt: Date.now() + PENDING_TTL_MS,
-    });
+    };
+    await pendingAuthsColl.doc(geniState).set(pending);
 
     const config = { ...this.oauthConfig, redirectUri: `${this.serverUrl}/oauth/callback` };
     res.redirect(buildAuthorizationUrl(config, geniState));
@@ -94,7 +128,10 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     code: string
   ): Promise<string> {
-    return this.pendingTokens.get(code)?.codeChallenge ?? "";
+    const doc = await pendingTokensColl.doc(code).get();
+    if (!doc.exists) return "";
+    const data = doc.data() as PendingToken;
+    return data.codeChallenge;
   }
 
   async exchangeAuthorizationCode(
@@ -104,9 +141,10 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     _redirectUri?: string,
     _resource?: URL
   ): Promise<OAuthTokens> {
-    const pending = this.pendingTokens.get(code);
-    if (!pending) throw new Error("Invalid or expired authorization code");
-    this.pendingTokens.delete(code);
+    const doc = await pendingTokensColl.doc(code).get();
+    if (!doc.exists) throw new Error("Invalid or expired authorization code");
+    const pending = doc.data() as PendingToken;
+    await pendingTokensColl.doc(code).delete();
     return pending.geniTokens;
   }
 
@@ -157,13 +195,18 @@ export class GeniOAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    const pending = this.pendingAuths.get(geniState);
-    if (!pending || Date.now() > pending.expiresAt) {
-      this.pendingAuths.delete(geniState);
+    const doc = await pendingAuthsColl.doc(geniState).get();
+    if (!doc.exists) {
       res.status(400).send("<h2>Unknown or expired authorization session</h2>");
       return;
     }
-    this.pendingAuths.delete(geniState);
+    const pending = doc.data() as PendingAuth;
+    if (Date.now() > pending.expiresAt) {
+      await pendingAuthsColl.doc(geniState).delete();
+      res.status(400).send("<h2>Unknown or expired authorization session</h2>");
+      return;
+    }
+    await pendingAuthsColl.doc(geniState).delete();
 
     const config = { ...this.oauthConfig, redirectUri: `${this.serverUrl}/oauth/callback` };
     let geniTokens: OAuthTokens;
@@ -182,7 +225,7 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     }
 
     const mcpCode = crypto.randomUUID();
-    this.pendingTokens.set(mcpCode, {
+    await pendingTokensColl.doc(mcpCode).set({
       geniTokens,
       codeChallenge: pending.codeChallenge,
       expiresAt: Date.now() + PENDING_TTL_MS,
@@ -192,12 +235,6 @@ export class GeniOAuthProvider implements OAuthServerProvider {
     redirectUrl.searchParams.set("code", mcpCode);
     if (pending.state) redirectUrl.searchParams.set("state", pending.state);
     res.redirect(redirectUrl.toString());
-  }
-
-  private evictExpired(): void {
-    const now = Date.now();
-    for (const [k, v] of this.pendingAuths) if (now > v.expiresAt) this.pendingAuths.delete(k);
-    for (const [k, v] of this.pendingTokens) if (now > v.expiresAt) this.pendingTokens.delete(k);
   }
 }
 
