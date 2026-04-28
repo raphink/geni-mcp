@@ -210,14 +210,14 @@ export class GeniClient {
     updates: GeniProfileUpdatePayload
   ): Promise<GeniProfile> {
     const id = normalizeProfileId(profileId);
-    return this.request<GeniProfile>("PUT", `/${id}`, undefined, updates);
+    return this.request<GeniProfile>("POST", `/${id}/update`, undefined, updates);
   }
 
   /** Create a new profile. */
   async createProfile(
     data: GeniProfileUpdatePayload & { first_name: string }
   ): Promise<GeniProfile> {
-    return this.request<GeniProfile>("POST", "/profile", undefined, data);
+    return this.request<GeniProfile>("POST", "/profile/add", undefined, data);
   }
 
   // ── Family endpoints ────────────────────────────────────────────────────────
@@ -357,7 +357,7 @@ function relationshipEndpoint(rel: RelationshipType): string {
     case "half_sibling":
       return "add-sibling"; // Geni uses the same endpoint; pass relationship type in body
     case "spouse":
-      return "add-spouse";
+      return "add-partner";
   }
 }
 
