@@ -122,8 +122,14 @@ export class GeniClient {
 
     const init: RequestInit = { method };
     if (body !== undefined) {
-      init.headers = { "Content-Type": "application/json" };
-      init.body = JSON.stringify(body);
+      // Geni's API accepts JSON or form data, but its server has been observed
+      // to return 500 ("Geni will be right back") on JSON bodies containing
+      // long text with newlines (e.g. about_me). Form-encoded payloads — which
+      // match every example in the Geni docs — are reliable, so we use those.
+      init.headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+      };
+      init.body = encodeFormBody(body);
     }
 
     for (let attempt = 0; ; attempt++) {
@@ -383,4 +389,42 @@ function computeBackoffMs(attempt: number): number {
   const base = Math.min(1000, 250 * 2 ** attempt);
   const jitter = Math.floor(Math.random() * 200);
   return base + jitter;
+}
+
+/**
+ * Encode an object as application/x-www-form-urlencoded, expanding nested
+ * objects to bracketed keys (e.g. `birth[date][year]=1900`) and arrays to
+ * indexed keys (e.g. `nationalities[0]=French`). Matches Geni's documented
+ * form-data conventions (e.g. `names[de][last_name]=Smith`).
+ */
+function encodeFormBody(body: unknown): string {
+  const params = new URLSearchParams();
+  appendFormFields(params, "", body);
+  return params.toString();
+}
+
+function appendFormFields(
+  params: URLSearchParams,
+  prefix: string,
+  value: unknown
+): void {
+  if (value === undefined || value === null) return;
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      appendFormFields(params, `${prefix}[${index}]`, item);
+    });
+    return;
+  }
+
+  if (typeof value === "object") {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const key = prefix ? `${prefix}[${k}]` : k;
+      appendFormFields(params, key, v);
+    }
+    return;
+  }
+
+  if (!prefix) return; // skip primitive at root
+  params.append(prefix, String(value));
 }
